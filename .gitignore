@@ -1,0 +1,54 @@
+# Dependencies and builds
+node_modules/
+dist/
+coverage/
+.vite/
+
+# Local configuration (the documented template is safe to publish)
+.env
+.env.*
+!.env.example
+
+# Runtime data, participant exports and backups
+data/
+backups/
+uploads/
+exports/
+*.sqlite
+*.sqlite3
+*.sqlite-*
+*.sqlite3-*
+*.db
+*.db-*
+*-wal
+*-shm
+*.xlsx
+*.csv
+*.tsv
+*.log
+*.bak
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+
+# Credentials and local tooling
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa
+id_ed25519
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+.cache/
+playwright-report/
+test-results/
+
+# Private deployment history and superseded local notes
+.local-notes/
+docs/private/
+VERIFICATION.md
+FEATURES-V2.md
