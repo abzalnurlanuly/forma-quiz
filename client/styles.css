@@ -88,6 +88,9 @@
 .participant-report-link:hover {
   text-decoration: underline;
 }
+.participant-board-code { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 12px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 7px; font-size: 16px; }
+.participant-board-code strong { font-variant-numeric: tabular-nums; letter-spacing: .06em; }
+.student-page.danger .participant-board-code { border-color: #ffffff80; }
 .content-revision { display: inline-block; margin-left: 12px; font-size: 14px; color: var(--muted); }
 .revision-select { width: min(100%, 260px); flex-shrink: 0; }
 .question-performance > .section-heading { flex-wrap: wrap; }
@@ -171,9 +174,6 @@
 .terminal-result {
   animation: content-arrive 0.2s ease-out both;
 }
-.player-question {
-  animation: question-arrive 0.18s ease-out both;
-}
 .modal,
 .toast {
   animation: content-arrive 0.17s ease-out both;
@@ -193,16 +193,6 @@
   }
   to {
     opacity: 1;
-  }
-}
-@keyframes question-arrive {
-  from {
-    opacity: 0;
-    translate: 0 7px;
-  }
-  to {
-    opacity: 1;
-    translate: 0 0;
   }
 }
 @keyframes feedback-arrive {
@@ -937,6 +927,10 @@ code {
   flex-direction: column;
   min-height: 100dvh;
   background: var(--surface);
+}
+.student-page {
+  /* Mobile browser toolbars must not resize the participant's page on scroll. */
+  min-height: 100svh;
 }
 .home-main {
   width: 90%;
@@ -2320,6 +2314,9 @@ tbody tr:last-child td {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+.player-question > h2:focus {
+  outline: none;
+}
 .question-image {
   max-width: 100%;
   max-height: 420px;
@@ -3696,7 +3693,8 @@ tbody tr:last-child td {
   }
   .player-progress-caption {
     align-items: flex-start;
-    flex-wrap: wrap;
+    flex-direction: column;
+    flex-wrap: nowrap;
     gap: 12px;
     font-size: 16px;
     margin: 17px 0 28px;

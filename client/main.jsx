@@ -1,6 +1,7 @@
 import React, {
   useState,
   useEffect,
+  useLayoutEffect,
   useRef,
   useCallback,
   createContext,
@@ -74,6 +75,8 @@ const SurveyReport = lazy(() => import("./surveys.jsx").then((module) => ({ defa
 const SurveyResponsePage = lazy(() => import("./surveys.jsx").then((module) => ({ default: module.SurveyResponsePage })));
 const PublicSurvey = lazy(() => import("./surveys.jsx").then((module) => ({ default: module.PublicSurvey })));
 const QuizAttemptPage = lazy(() => import("./quiz-response.jsx"));
+const PublicBoard = lazy(() => import("./board.jsx"));
+const BoardSettings = lazy(() => import("./board-settings.jsx"));
 import {
   LanguageProvider,
   useLanguage,
@@ -139,6 +142,9 @@ const defaults = {
   deadline: null,
   antiCheat: false,
   oneAttemptPerIp: false,
+  publicBoardEnabled: false,
+  publicBoardShowNames: false,
+  publicBoardShowScores: true,
   maxWarnings: 3,
   shuffleQuestions: true,
   shuffleOptions: true,
@@ -555,10 +561,19 @@ function Modal({
   const box = useRef();
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
-  useEffect(() => {
+  useLayoutEffect(() => {
     const previous = document.activeElement;
-    const previousBodyOverflow = document.body.style.overflow;
+    const scroll = { left: window.scrollX, top: window.scrollY };
+    const bodyStyles = Object.fromEntries(
+      ["overflow", "position", "top", "left", "width"].map((key) => [key, document.body.style[key]]),
+    );
+    // A fixed body also locks the background in iOS Safari. Keeping its offset
+    // prevents opening/closing a dialog from moving the question underneath it.
     document.body.style.overflow = "hidden";
+    document.body.style.position = "fixed";
+    document.body.style.top = `${-scroll.top}px`;
+    document.body.style.left = `${-scroll.left}px`;
+    document.body.style.width = "100%";
     box.current?.focus({ preventScroll: true });
     const handle = (e) => {
       if (e.key === "Escape") onCloseRef.current();
@@ -592,7 +607,8 @@ function Modal({
     document.addEventListener("keydown", handle);
     return () => {
       document.removeEventListener("keydown", handle);
-      document.body.style.overflow = previousBodyOverflow;
+      Object.assign(document.body.style, bodyStyles);
+      window.scrollTo({ ...scroll, behavior: "instant" });
       if (previous?.isConnected) previous.focus({ preventScroll: true });
     };
   }, []);
@@ -1882,6 +1898,7 @@ function QuizEditor() {
         )}
         {tab === "settings" && (
           <div className="settings-layout">
+            <Suspense fallback={<Loading />}><BoardSettings quiz={quiz} ui={sharedUi} dirty={dirty} saving={saving} onChange={(publicBoardEnabled) => settings({ publicBoardEnabled })} onPresentationChange={(field, value) => settings({ [field]: value })} onSave={() => save()} onTokenChange={(publicBoardToken) => setQuiz((current) => ({ ...current, publicBoardToken }))} /></Suspense>
             <section className="panel settings-panel">
               <div className="section-heading">
                 <div>
@@ -3582,6 +3599,10 @@ function StudentPlayer({ initialAttempt, quiz, onRefresh, onRetry, retryBusy, re
   const lastEvent = useRef(0);
   const alive = useRef(true);
   const seenWarnings = useRef(initialAttempt.warnings || 0);
+  const questionPanel = useRef(null);
+  const questionHeading = useRef(null);
+  const navigationTarget = useRef(null);
+  const wasTerminal = useRef(initialAttempt.status !== "active");
   const { ready, duplicate } = useAttemptLock(
     attempt.id,
     attempt.status === "active" && !removed,
@@ -3595,6 +3616,27 @@ function StudentPlayer({ initialAttempt, quiz, onRefresh, onRetry, retryBusy, re
     duplicate,
   };
   const terminal = attempt.status !== "active" || removed;
+  const goToQuestion = (nextIndex) => {
+    if (nextIndex === index) return;
+    navigationTarget.current = nextIndex;
+    setIndex(nextIndex);
+  };
+  useLayoutEffect(() => {
+    if (terminal && !wasTerminal.current) {
+      window.scrollTo({ top: 0, left: 0, behavior: "instant" });
+    } else if (!terminal && navigationTarget.current === index && questionPanel.current) {
+      navigationTarget.current = null;
+      questionHeading.current?.focus({ preventScroll: true });
+      // Move once, before paint. The browser may clamp at the document end for
+      // a short question; neither autosaves nor the timer change this position.
+      window.scrollTo({
+        top: Math.max(0, questionPanel.current.getBoundingClientRect().top + window.scrollY - 16),
+        left: 0,
+        behavior: "instant",
+      });
+    }
+    wasTerminal.current = terminal;
+  }, [index, terminal]);
   const storageKey = `forma-quiz-events-${attempt.id}`;
   const accept = useCallback(
     (a) => {
@@ -4092,6 +4134,7 @@ function StudentPlayer({ initialAttempt, quiz, onRefresh, onRetry, retryBusy, re
               {attempt.name}
               {attempt.group ? ` · ${attempt.group}` : ""}
             </p>
+            {attempt.boardCode && <div className="participant-board-code"><Radio size={16} /><span>{t("Ваш номер на табло")}</span><strong>#{attempt.boardCode}</strong></div>}
           </div>
           <div className="player-controls">
             {attempt.settings.antiCheat && (
@@ -4195,7 +4238,7 @@ function StudentPlayer({ initialAttempt, quiz, onRefresh, onRetry, retryBusy, re
                 <button
                   key={q.id}
                   className={`${i === index ? "current" : ""} ${answered(q) ? "answered" : ""}`}
-                  onClick={() => setIndex(i)}
+                  onClick={() => goToQuestion(i)}
                   aria-label={t("Вопрос {value0}{value1}", {
                     value0: i + 1,
                     value1: answered(q) ? t(", отвечен") : "",
@@ -4216,7 +4259,7 @@ function StudentPlayer({ initialAttempt, quiz, onRefresh, onRetry, retryBusy, re
               {t("и менять ответы до отправки. ")}
             </p>
           </aside>
-          <section className="player-question panel" key={question?.id}>
+          <section className="player-question panel" ref={questionPanel}>
             {question ? (
               <>
                 <div className="question-caption">
@@ -4227,7 +4270,7 @@ function StudentPlayer({ initialAttempt, quiz, onRefresh, onRetry, retryBusy, re
                   </span>
                   <small>{t(typeLabels[question.type])}</small>
                 </div>
-                <h2>{question.text}</h2>
+                <h2 ref={questionHeading} tabIndex={-1}>{question.text}</h2>
                 {question.image && (
                   <img
                     className="question-image"
@@ -4236,6 +4279,7 @@ function StudentPlayer({ initialAttempt, quiz, onRefresh, onRetry, retryBusy, re
                   />
                 )}
                 <fieldset
+                  key={question.id}
                   disabled={
                     submitting ||
                     checking ||
@@ -4393,7 +4437,7 @@ function StudentPlayer({ initialAttempt, quiz, onRefresh, onRetry, retryBusy, re
                   <Button
                     variant="secondary"
                     disabled={index === 0 || submitting || checking}
-                    onClick={() => setIndex(index - 1)}
+                    onClick={() => goToQuestion(index - 1)}
                   >
                     <ArrowLeft size={17} />
                     <span>{t("Назад")}</span>
@@ -4410,7 +4454,7 @@ function StudentPlayer({ initialAttempt, quiz, onRefresh, onRetry, retryBusy, re
                       <Check size={17} />
                     </Button>
                   ) : (
-                    <Button onClick={() => setIndex(index + 1)}>
+                    <Button onClick={() => goToQuestion(index + 1)}>
                       {t(" Далее ")}
                       <ArrowRight size={17} />
                     </Button>
@@ -4530,6 +4574,7 @@ function TerminalResult({ attempt, quiz, onRetry, retryBusy, retryError }) {
                 )
               : t("Ответы отправлены. Результат сохранён.")}
         </p>
+        {attempt.boardCode && <div className="participant-board-code"><Radio size={16} /><span>{t("Ваш номер на табло")}</span><strong>#{attempt.boardCode}</strong></div>}
         {bad && attempt.retakeGranted && <div className="retake-granted"><p>{t("Администратор разрешил пересдачу. Таймер начнётся после нажатия кнопки и принятия правил.")}</p><Button loading={retryBusy} onClick={onRetry}><RefreshCw size={18} />{t("Начать заново")}</Button></div>}
         {retryError && <div className="inline-alert" role="alert">{t(retryError)}</div>}
         {scoreVisible && !bad && (
@@ -4666,6 +4711,7 @@ function App() {
             }
           />
           <Route path="/q/:slug" element={<StudentEntry />} />
+          <Route path="/b/:code" element={<PublicBoard />} />
           <Route path="/admin/quizzes/:id/report/attempts/:attemptId" element={<AdminGate><QuizAttemptPage ui={sharedUi} /></AdminGate>} />
           <Route path="*" element={<NotFound />} />
         </Routes></Suspense>

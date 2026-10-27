@@ -1,4 +1,4 @@
-import { randomUUID, randomInt } from "node:crypto";
+import { randomUUID, randomInt, randomBytes } from "node:crypto";
 
 export class ApiError extends Error {
   constructor(status, message) {
@@ -17,6 +17,9 @@ export const defaults = {
   deadline: null,
   antiCheat: false,
   oneAttemptPerIp: false,
+  publicBoardEnabled: false,
+  publicBoardShowNames: false,
+  publicBoardShowScores: true,
   maxWarnings: 3,
   shuffleQuestions: true,
   shuffleOptions: true,
@@ -26,9 +29,14 @@ export const defaults = {
   feedbackMode: "end",
 };
 export const normalizeSettings = (settings = {}) => ({
-  ...defaults,
-  ...settings,
+  ...Object.fromEntries(Object.entries(defaults).map(([key, fallback]) =>
+    [key, settings != null && Object.hasOwn(settings, key) ? settings[key] : fallback])),
+  publicBoardEnabled: settings?.publicBoardEnabled === true,
+  publicBoardShowNames: settings?.publicBoardShowNames === true,
+  publicBoardShowScores: settings?.publicBoardShowScores === undefined || settings.publicBoardShowScores === true,
 });
+export const isPublicBoardToken = (value) => typeof value === "string" && /^[A-Za-z0-9_-]{16}$/.test(value);
+export const newPublicBoardToken = () => randomBytes(12).toString("base64url");
 export const contentRevision = (document) =>
   Number.isSafeInteger(document?.contentRevision) && document.contentRevision > 0
     ? document.contentRevision
@@ -106,6 +114,9 @@ export function validateQuiz(input, original) {
     "requireStudentCode",
     "antiCheat",
     "oneAttemptPerIp",
+    "publicBoardEnabled",
+    "publicBoardShowNames",
+    "publicBoardShowScores",
     "shuffleQuestions",
     "shuffleOptions",
     "showScore",
@@ -298,6 +309,10 @@ export function validateQuiz(input, original) {
     outro: text(data.outro, 12000),
     status,
     settings,
+    publicBoardToken: settings.publicBoardEnabled
+      ? original.settings?.publicBoardEnabled === true && isPublicBoardToken(original.publicBoardToken)
+        ? original.publicBoardToken : newPublicBoardToken()
+      : null,
     questions,
     groups,
     contentRevision: nextContentRevision(original,
@@ -323,6 +338,7 @@ export function newQuiz(title = "Новый квиз") {
     status: "draft",
     contentRevision: 1,
     settings: { ...defaults },
+    publicBoardToken: null,
     questions: [],
     groups: [],
     createdAt: now,
@@ -351,6 +367,9 @@ export function snapshotQuiz(quiz) {
       q.choices = shuffle([...new Set(q.pairs.map((pair) => pair.right))]);
   }
   delete snapshot.groups;
+  // A revocable public capability belongs to the live author document, never to
+  // grading snapshots or archived attempts.
+  delete snapshot.publicBoardToken;
   return snapshot;
 }
 

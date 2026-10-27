@@ -35,10 +35,13 @@ import {
   calculateResult,
   contentRevision,
   normalizeSlugAliases,
+  isPublicBoardToken,
+  newPublicBoardToken,
 } from "./model.js";
 import { exportReport } from "./export.js";
 import { imageDimensions } from "./media.js";
 import { mountSurveyRoutes } from "./surveys.js";
+import { mountPublicBoard } from "./board.js";
 
 const rootDir = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const date = () => new Date().toISOString();
@@ -73,6 +76,7 @@ export function createApp(options = {}) {
   const liveClients = new Set();
   const presenceStates = new Map();
   let surveys = null;
+  let boards = null;
   const notifyChange = (change) => {
     for (const client of liveClients) {
       if (!db.prepare("SELECT 1 FROM sessions WHERE token_hash = ? AND expires_at > ?").get(client.sessionHash, date())) {
@@ -81,7 +85,10 @@ export function createApp(options = {}) {
       } else client.res.write(`event: update\ndata: ${JSON.stringify(change)}\n\n`);
     }
   };
-  const notifyQuiz = (quizId) => notifyChange({ quizId });
+  const notifyQuiz = (quizId) => {
+    notifyChange({ quizId });
+    boards?.notify(quizId);
+  };
   app.disable("x-powered-by");
   app.set("trust proxy", false);
   app.use(
@@ -163,6 +170,7 @@ export function createApp(options = {}) {
       keyGenerator: rateKey,
       standardHeaders: "draft-8",
       legacyHeaders: false,
+      skip: (req) => /^\/public\/boards\/[^/]+(?:\/live)?\/?$/.test(req.path),
       message: { error: "Слишком много запросов. Подождите минуту." },
     }),
   );
@@ -192,6 +200,7 @@ export function createApp(options = {}) {
     if (!row) fail(404, "Квиз не найден.");
     const quiz = JSON.parse(row.doc);
     quiz.settings = normalizeSettings(quiz.settings);
+    quiz.publicBoardToken = quiz.settings.publicBoardEnabled && isPublicBoardToken(quiz.publicBoardToken) ? quiz.publicBoardToken : null;
     quiz.contentRevision = contentRevision(quiz);
     quiz.slugAliases = normalizeSlugAliases(quiz);
     return quiz;
@@ -203,6 +212,7 @@ export function createApp(options = {}) {
     if (!row) fail(404, "Квиз не найден.");
     const quiz = JSON.parse(row.doc);
     quiz.settings = normalizeSettings(quiz.settings);
+    quiz.publicBoardToken = quiz.settings.publicBoardEnabled && isPublicBoardToken(quiz.publicBoardToken) ? quiz.publicBoardToken : null;
     quiz.contentRevision = contentRevision(quiz);
     quiz.slugAliases = normalizeSlugAliases(quiz);
     return quiz;
@@ -300,16 +310,20 @@ export function createApp(options = {}) {
   function participant(row) {
     const snapshot = JSON.parse(row.snapshot);
     snapshot.settings = normalizeSettings(snapshot.settings);
+    const currentQuiz = getQuiz(row.quiz_id);
+    const boardCode = boards?.ownCode(row, currentQuiz);
+    snapshot.settings.publicBoardEnabled = !!boardCode;
     // Post-test answer disclosure is a current publishing permission, independent
     // of the frozen grading snapshot. Missing legacy settings default to hidden.
     if (row.status !== "active")
       snapshot.settings.showCorrectAnswersAfterTest =
-        getQuiz(row.quiz_id).settings.showCorrectAnswersAfterTest === true;
+        currentQuiz.settings.showCorrectAnswersAfterTest === true;
     const result = {
       id: row.id,
       quizId: row.quiz_id,
       contentRevision: contentRevision(snapshot),
       title: snapshot.title,
+      ...(boardCode ? { boardCode } : {}),
       status: row.status,
       name: row.name,
       group: row.group_name,
@@ -375,6 +389,7 @@ export function createApp(options = {}) {
   app.locals.closeLive = () => {
     for (const client of liveClients) client.res.end();
     liveClients.clear();
+    boards?.close();
   };
   app.locals.close = () => {
     clearInterval(sweeper);
@@ -383,6 +398,7 @@ export function createApp(options = {}) {
     db.close();
   };
   const liveKeepalive = setInterval(() => {
+    boards?.keepalive();
     for (const client of liveClients) {
       const valid = db.prepare("SELECT 1 FROM sessions WHERE token_hash = ? AND expires_at > ?").get(client.sessionHash, date());
       if (!valid) {
@@ -597,6 +613,7 @@ export function createApp(options = {}) {
           status: q.status,
           contentRevision: contentRevision(q),
           settings: normalizeSettings(q.settings),
+          publicBoardToken: q.settings?.publicBoardEnabled === true && isPublicBoardToken(q.publicBoardToken) ? q.publicBoardToken : null,
           questionCount: q.questions.filter((q) => q.type !== "content").length,
           attemptCount: row.attempt_count,
           activeCount: active.length,
@@ -625,6 +642,9 @@ export function createApp(options = {}) {
     const result = transaction(db, () => {
       const old = getQuiz(req.params.id);
       const quiz = validateQuiz(req.body, old);
+      while (quiz.publicBoardToken && db.prepare(
+        "SELECT 1 FROM quizzes WHERE id != ? AND json_extract(doc, '$.publicBoardToken') = ? LIMIT 1",
+      ).get(quiz.id, quiz.publicBoardToken)) quiz.publicBoardToken = newPublicBoardToken();
       for (const q of quiz.questions)
         if (q.image && !existsSync(resolve(dataDir, `.${q.image}`)))
           fail(400, "Загруженное изображение не найдено.");
@@ -669,7 +689,7 @@ export function createApp(options = {}) {
       description: old.description,
       intro: old.intro,
       outro: old.outro,
-      settings: { ...old.settings, deadline: null },
+      settings: { ...old.settings, deadline: null, publicBoardEnabled: false },
       questions: structuredClone(old.questions),
       groups: structuredClone(old.groups),
     };
@@ -1361,6 +1381,7 @@ export function createApp(options = {}) {
     notify: (surveyId) => notifyChange({ surveyId }), exportReport,
     startLimit,
   });
+  boards = mountPublicBoard(app, { db, auth, getQuiz, expire, notifyQuiz, cookieOptions, ipAddress });
 
   app.use(
     "/uploads",

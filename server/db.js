@@ -194,6 +194,7 @@ export function openDatabase(dataDir) {
     );
   transaction(db, () => {
     db.prepare("INSERT OR IGNORE INTO private_config(key,value) VALUES('ip_digest_secret',?)").run(token());
+    db.prepare("INSERT OR IGNORE INTO private_config(key,value) VALUES('public_board_secret',?)").run(token());
     for (const row of db.prepare("SELECT id,quiz_id,ip FROM attempts WHERE ip IS NOT NULL AND ip_key IS NULL").all())
       db.prepare("UPDATE attempts SET ip_key = ? WHERE id = ?").run(addressKey(db, row.quiz_id, row.ip), row.id);
   });
